@@ -80,8 +80,34 @@ async def test_handle_action_with_error(manager):
 
 
 @pytest.mark.asyncio
-async def test_status_endpoint(manager):
-    """Test the /status endpoint."""
+async def test_status_endpoint_comprehensive(manager):
+    """Test the /status endpoint comprehensively."""
+    # 1. Test status before acquisition
+    response = client.get("/status")
+    assert response.status_code == 200
+    assert response.json() == {"running": False, "clients": 0}
+
+    # 2. Test status during acquisition
+    client.post("/start")
+    await asyncio.sleep(0)  # Yield control to allow the task to start
+    response = client.get("/status")
+    assert response.status_code == 200
+    assert response.json() == {"running": True, "clients": 0}
+
+    # 3. Test status with a connected client
+    with client.websocket_connect("/ws/data") as websocket:
+        response = client.get("/status")
+        assert response.status_code == 200
+        assert response.json() == {"running": True, "clients": 1}
+
+    # 4. Test status after client disconnects
+    response = client.get("/status")
+    assert response.status_code == 200
+    assert response.json() == {"running": True, "clients": 0}
+
+    # 5. Test status after acquisition stops
+    client.post("/stop")
+    await asyncio.sleep(0) # Yield control to allow the task to stop
     response = client.get("/status")
     assert response.status_code == 200
     assert response.json() == {"running": False, "clients": 0}
