@@ -1,6 +1,6 @@
-pyqt6
-pyqtgraph
+PyQt6
 pyyaml
+numpy
+pyqtgraph
 httpx
 websockets
-numpy

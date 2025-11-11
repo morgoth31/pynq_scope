@@ -36,17 +36,17 @@ class PYNQScopeGUI(QMainWindow):
         self.setCentralWidget(self.central_widget)
         self.layout = QVBoxLayout(self.central_widget)
 
+        # Buffers and plot curves for 8 channels
+        self.plot_buffers = [np.zeros(1000, dtype=np.int16) for _ in range(8)]
+        self.plot_curves = []
+        self.channel_colors = ['y', 'b', 'g', 'r', 'c', 'm', 'w', 'k'] # Colors for each channel
+
         self.create_widgets()
         self.load_config()
 
         self.communicator = ServerCommunicator(self.server_ip_input.text())
         self.worker_thread = None
         
-        # Buffers and plot curves for 8 channels
-        self.plot_buffers = [np.zeros(1000, dtype=np.int16) for _ in range(8)]
-        self.plot_curves = []
-        self.channel_colors = ['y', 'b', 'g', 'r', 'c', 'm', 'w', 'k'] # Colors for each channel
-
         self.last_update_time = time.time()
         self.chunk_count = 0
         self.data_amount = 0

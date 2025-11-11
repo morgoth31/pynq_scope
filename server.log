@@ -1,4 +1,0 @@
-Traceback (most recent call last):
-  File "/app/server/pynq_scope_server.py", line 2, in <module>
-    import numpy as np
-ModuleNotFoundError: No module named 'numpy'
