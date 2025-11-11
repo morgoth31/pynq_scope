@@ -6,8 +6,14 @@ import argparse
 from logging.handlers import TimedRotatingFileHandler
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from typing import List, Dict, Any
-from server.dma_acquisition import dmaAcquisition
 import time
+
+try:
+    # This import works when running tests from the project root
+    from server.dma_acquisition import dmaAcquisition
+except ModuleNotFoundError:
+    # This import works when running the server directly from the server directory
+    from dma_acquisition import dmaAcquisition
 
 import os
 
