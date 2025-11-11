@@ -47,5 +47,17 @@ class ServerCommunicator:
                 response = await client.post(url)
                 print(f"API [POST /{action}]: Réponse {response.status_code} "
                       f"-> {response.json()}")
+                return response.json()
         except httpx.ConnectError as e:
             print(f"Erreur de connexion API: {e}")
+            return None
+
+    async def get_status(self):
+        url = f"http://{self.server_ip}/status"
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(url)
+                return response.json()
+        except httpx.ConnectError as e:
+            print(f"Erreur de connexion API: {e}")
+            return None

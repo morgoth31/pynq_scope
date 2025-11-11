@@ -2,6 +2,7 @@ import asyncio
 import numpy as np
 import uvicorn
 import logging
+import argparse
 from logging.handlers import TimedRotatingFileHandler
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from typing import List, Dict, Any
@@ -31,11 +32,15 @@ BITSTREAM = "activ_filter_one_7010.bit"
 class AcquisitionManager:
     """Manages data acquisition, WebSocket connections, and data broadcasting."""
 
-    def __init__(self):
+    def __init__(self, emulate: bool = False):
         """Initializes the AcquisitionManager."""
         self.active_connections: List[WebSocket] = []
         self.is_running: bool = False
         self.acquisition_task: asyncio.Task | None = None
+        self.emulate = emulate
+        if self.emulate:
+            self.t = np.linspace(0, 1, SAMPLE_RATE, endpoint=False)
+            self.phase = 0
 
     async def connect(self, websocket: WebSocket):
         """
@@ -82,7 +87,30 @@ class AcquisitionManager:
         try:
             while self.is_running:
                 try:
-                    array_0, _, _, _, _, _, _, _ = dma.acquire_data(SAMPLE_RATE, CHUNK_SIZE)
+                    if self.emulate:
+                        # Emulation: générer une sinusoïde
+                        freq = 50  # Hz
+                        amplitude = 2**14
+
+                        # Calcule la phase pour le chunk actuel
+                        start_index = self.phase
+                        end_index = self.phase + CHUNK_SIZE
+
+                        # Génère les indices de temps pour le chunk
+                        indices = np.arange(start_index, end_index)
+
+                        # Génère le signal sinusoïdal
+                        signal = amplitude * np.sin(2 * np.pi * freq * indices / SAMPLE_RATE)
+
+                        # Met à jour la phase pour le prochain chunk
+                        self.phase = end_index % SAMPLE_RATE
+
+                        array_0 = signal.astype(DTYPE)
+
+                    else:
+                        # Mode réel: acquisition DMA
+                        array_0, _, _, _, _, _, _, _ = dma.acquire_data(SAMPLE_RATE, CHUNK_SIZE)
+
                     data_bytes = array_0.tobytes()
                     if self.active_connections:
                         await self.broadcast(data_bytes)
@@ -145,8 +173,8 @@ class AcquisitionManager:
 
 # --- Initialisation de FastAPI et du Manager ---
 app = FastAPI()
-manager = AcquisitionManager()
-dma = dmaAcquisition("activ_filter_one_7010.bit")
+dma = None  # Sera initialisé plus tard si nécessaire
+manager = None  # Sera initialisé dans le main
 
 # --- Points de terminaison (Endpoints) ---
 
@@ -192,6 +220,20 @@ async def websocket_data(websocket: WebSocket):
 
 # --- Point d'entrée pour Uvicorn ---
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Serveur FastAPI pour PYNQ Scope")
+    parser.add_argument("--emulate", action="store_true", help="Activer le mode d'émulation sans DMA.")
+    args = parser.parse_args()
+
+    # Initialisation du manager avec le mode d'émulation
+    manager = AcquisitionManager(emulate=args.emulate)
+
+    # Initialisation du DMA seulement si on n'est pas en mode émulation
+    if not args.emulate:
+        dma = dmaAcquisition(BITSTREAM)
+        logger.info("DMA initialisé.")
+    else:
+        logger.info("Mode d'émulation activé. Le DMA ne sera pas utilisé.")
+
     print("Lancement du serveur sur http://0.0.0.0:8000")
     uvicorn.run(app, host="0.0.0.0", port=8000)
 

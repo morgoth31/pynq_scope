@@ -6,7 +6,7 @@ import os
 import logging
 from logging.handlers import TimedRotatingFileHandler
 from datetime import datetime
-from PyQt6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QLineEdit, QSlider
+from PyQt6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QLineEdit, QSlider, QMessageBox
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 import yaml
 import numpy as np
@@ -147,14 +147,22 @@ class PYNQScopeGUI(QMainWindow):
         msg_box.setWindowTitle("Error")
         msg_box.exec()
 
+    def update_status_label(self, is_connected, message):
+        """Updates the status label based on the connection status."""
+        if is_connected:
+            self.status_label.setText(f"Server Status: {message}")
+            self.status_label.setStyleSheet("color: green")
+        else:
+            self.status_label.setText(f"Server Status: {message}")
+            self.status_label.setStyleSheet("color: red")
+
     def start_acquisition(self):
         try:
             self.communicator.server_ip = self.server_ip_input.text()
             self.worker_thread = WorkerThread(self.communicator)
             self.worker_thread.data_received.connect(self.handle_data)
+            self.worker_thread.connection_status.connect(self.update_status_label)
             self.worker_thread.start()
-            self.status_label.setText("Server Status: Connected")
-            self.status_label.setStyleSheet("color: green")
             logger.info("Acquisition started.")
         except Exception as e:
             logger.error(f"Failed to start acquisition: {e}")
@@ -229,6 +237,7 @@ class PYNQScopeGUI(QMainWindow):
 
 class WorkerThread(QThread):
     data_received = pyqtSignal(np.ndarray)
+    connection_status = pyqtSignal(bool, str)
 
     def __init__(self, communicator):
         super().__init__()
@@ -240,7 +249,14 @@ class WorkerThread(QThread):
     async def run_async(self):
         await self.communicator.control_api("start")
         if await self.communicator.connect():
-            await self.communicator.data_receiver(self.handle_data)
+            status = await self.communicator.get_status()
+            if status and status.get("running"):
+                self.connection_status.emit(True, "Connected")
+                await self.communicator.data_receiver(self.handle_data)
+            else:
+                self.connection_status.emit(False, "Server not running")
+        else:
+            self.connection_status.emit(False, "Connection failed")
 
     def stop(self):
         self.communicator.stop_event.set()
