@@ -2,7 +2,8 @@ import asyncio
 import numpy as np
 import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from typing import List
+from typing import List, Dict, Any
+from dma_acquisition import dmaAcquisition
 
 # --- Configuration de l'Acquisition ---
 SAMPLE_RATE = 1000  # Echantillons/seconde
@@ -46,16 +47,11 @@ class AcquisitionManager:
         self.is_running = True
         try:
             while self.is_running:
-                # 1. Simuler l'acquisition de données
-                # Génère 100 échantillons aléatoires de type int16
-                data_chunk = np.random.randint(
-                    -32768, 32767, 
-                    size=CHUNK_SIZE, 
-                    dtype=DTYPE
-                )
+                # 1. Acquerir les données
+                array_0, _, _, _, _, _, _, _ = dma.acquire_data(SAMPLE_RATE, CHUNK_SIZE)
 
                 # 2. Sérialiser en binaire (critique pour la performance)
-                data_bytes = data_chunk.tobytes()
+                data_bytes = array_0.tobytes()
 
                 # 3. Diffuser les données
                 if self.active_connections:
@@ -85,9 +81,19 @@ class AcquisitionManager:
             return {"status": "Acquisition arrêtée"}
         return {"status": "Acquisition non démarrée"}
 
+    async def handle_action(self, action: str, params: Dict[str, Any]):
+        """Gère une action de configuration."""
+        print(f"Action reçue: {action} avec les paramètres: {params}")
+        # Logique de distribution des actions
+        if action == "set_sample_rate":
+            global SAMPLE_RATE
+            SAMPLE_RATE = params.get("value", SAMPLE_RATE)
+        return {"status": "Action traitée", "action": action}
+
 # --- Initialisation de FastAPI et du Manager ---
 app = FastAPI()
 manager = AcquisitionManager()
+dma = dmaAcquisition()
 
 # --- Points de terminaison (Endpoints) ---
 
@@ -105,6 +111,15 @@ async def api_stop():
 async def api_status():
     """Endpoint pour vérifier l'état."""
     return {"running": manager.is_running, "clients": len(manager.active_connections)}
+
+@app.post("/configure")
+async def api_configure(config: Dict[str, Any]):
+    """Endpoint pour la configuration dynamique."""
+    action = config.get("action")
+    params = config.get("params", {})
+    if not action:
+        return {"error": "Aucune action spécifiée"}
+    return await manager.handle_action(action, params)
 
 @app.websocket("/ws/data")
 async def websocket_data(websocket: WebSocket):
