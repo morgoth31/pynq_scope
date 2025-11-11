@@ -341,8 +341,8 @@ class WorkerThread(QThread):
     def stop(self):
         self.communicator.stop_event.set()
         if self.loop.is_running():
-            asyncio.run_coroutine_threadsafe(self.communicator.control_api("stop"), self.loop).result()
-            asyncio.run_coroutine_threadsafe(self.communicator.disconnect(), self.loop).result()
+            asyncio.run_coroutine_threadsafe(self.communicator.control_api("stop"), self.loop)
+            asyncio.run_coroutine_threadsafe(self.communicator.disconnect(), self.loop)
         self.loop.call_soon_threadsafe(self.loop.stop)
 
     def handle_data(self, data):

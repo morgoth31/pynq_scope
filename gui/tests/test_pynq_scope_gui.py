@@ -75,3 +75,19 @@ def test_start_acquisition_exception(mock_message_box, gui_app, qtbot):
         # Assert that a QMessageBox instance was created and shown
         mock_message_box.return_value.exec.assert_called_once()
         assert "Server Status: Disconnected" in gui_app.status_label.text()
+
+@patch('gui.pynq_scope_gui.WorkerThread')
+def test_stop_acquisition(mock_worker_thread, gui_app, qtbot):
+    """Test the stop button's behavior."""
+    # Start acquisition first
+    gui_app.start_button.click()
+    mock_worker_thread.assert_called_once()
+    gui_app.worker_thread.start.assert_called_once()
+
+    # Now, stop it
+    gui_app.stop_button.click()
+
+    # Assert that the worker thread's stop and wait methods were called
+    gui_app.worker_thread.stop.assert_called_once()
+    gui_app.worker_thread.wait.assert_called_once()
+    assert "Server Status: Disconnected" in gui_app.status_label.text()
