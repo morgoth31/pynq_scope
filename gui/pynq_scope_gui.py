@@ -3,6 +3,8 @@ import asyncio
 import time
 import csv
 import os
+import logging
+from logging.handlers import TimedRotatingFileHandler
 from datetime import datetime
 from PyQt6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QLineEdit, QSlider
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
@@ -11,8 +13,21 @@ import numpy as np
 import pyqtgraph as pg
 from communication import ServerCommunicator
 
+# --- Configuration du Logging ---
+if not os.path.exists("logs"):
+    os.makedirs("logs")
+log_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+log_handler = TimedRotatingFileHandler("logs/gui.log", when="midnight", interval=1, backupCount=7)
+log_handler.setFormatter(log_formatter)
+logger = logging.getLogger()
+logger.addHandler(log_handler)
+logger.setLevel(logging.INFO)
+
 class PYNQScopeGUI(QMainWindow):
+    """Main window for the PYNQ Scope GUI."""
+
     def __init__(self):
+        """Initializes the GUI."""
         super().__init__()
         self.setWindowTitle("PYNQ Scope GUI")
         self.setGeometry(100, 100, 800, 600)
@@ -27,29 +42,26 @@ class PYNQScopeGUI(QMainWindow):
         self.communicator = ServerCommunicator(self.server_ip_input.text())
         self.worker_thread = None
         
-        # Data buffer for plotting
         self.plot_buffer = np.zeros(1000, dtype=np.int16)
         self.last_update_time = time.time()
         self.chunk_count = 0
         self.data_amount = 0
         
-        # Recording state
         self.is_recording = False
         self.csv_file = None
         self.csv_writer = None
+        logger.info("GUI initialized.")
 
     def create_widgets(self):
-        # Server status indicator
+        """Creates and arranges the widgets in the GUI."""
         self.status_label = QLabel("Server Status: Disconnected")
         self.status_label.setStyleSheet("color: red")
         self.layout.addWidget(self.status_label)
         
-        # Oscilloscope plot
         self.plot_widget = pg.PlotWidget()
         self.layout.addWidget(self.plot_widget)
         self.plot_curve = self.plot_widget.plot(pen='y')
 
-        # Performance metrics
         self.perf_layout = QHBoxLayout()
         self.refresh_rate_label = QLabel("Refresh Rate: 0 Hz")
         self.bandwidth_label = QLabel("Bandwidth: 0 B/s")
@@ -57,7 +69,6 @@ class PYNQScopeGUI(QMainWindow):
         self.perf_layout.addWidget(self.bandwidth_label)
         self.layout.addLayout(self.perf_layout)
 
-        # Control buttons
         self.controls_layout = QHBoxLayout()
         self.start_button = QPushButton("Start")
         self.start_button.clicked.connect(self.start_acquisition)
@@ -71,7 +82,6 @@ class PYNQScopeGUI(QMainWindow):
         self.controls_layout.addWidget(self.record_button)
         self.layout.addLayout(self.controls_layout)
 
-        # Configuration settings
         self.config_layout = QVBoxLayout()
         
         self.server_ip_label = QLabel("Server IP:")
@@ -95,23 +105,30 @@ class PYNQScopeGUI(QMainWindow):
         self.config_layout.addWidget(self.rate_value_label)
         
         self.layout.addLayout(self.config_layout)
+        logger.info("Widgets created.")
 
     def update_rate_label(self, value):
+        """Updates the rate label when the slider is moved."""
         self.rate_value_label.setText(str(value))
+        logger.debug(f"Rate slider updated to {value}")
 
     def load_config(self):
+        """Loads the configuration from config.yml."""
         try:
             with open("config.yml", "r") as f:
                 config = yaml.safe_load(f)
                 self.server_ip_input.setText(config.get("server_ip", "127.0.0.1:8000"))
                 self.data_folder_input.setText(config.get("data_folder", "./data"))
                 self.rate_slider.setValue(config.get("rate", 1000))
+                logger.info("Configuration loaded from config.yml")
         except FileNotFoundError:
             self.server_ip_input.setText("127.0.0.1:8000")
             self.data_folder_input.setText("./data")
             self.rate_slider.setValue(1000)
+            logger.warning("config.yml not found, using default configuration.")
 
     def save_config(self):
+        """Saves the current configuration to config.yml."""
         config = {
             "server_ip": self.server_ip_input.text(),
             "data_folder": self.data_folder_input.text(),
@@ -119,14 +136,29 @@ class PYNQScopeGUI(QMainWindow):
         }
         with open("config.yml", "w") as f:
             yaml.dump(config, f)
+        logger.info("Configuration saved to config.yml")
+
+    def show_error_message(self, title, message):
+        """Displays an error message in a message box."""
+        msg_box = QMessageBox()
+        msg_box.setIcon(QMessageBox.Icon.Critical)
+        msg_box.setText(title)
+        msg_box.setInformativeText(message)
+        msg_box.setWindowTitle("Error")
+        msg_box.exec()
 
     def start_acquisition(self):
-        self.communicator.server_ip = self.server_ip_input.text()
-        self.worker_thread = WorkerThread(self.communicator)
-        self.worker_thread.data_received.connect(self.handle_data)
-        self.worker_thread.start()
-        self.status_label.setText("Server Status: Connected")
-        self.status_label.setStyleSheet("color: green")
+        try:
+            self.communicator.server_ip = self.server_ip_input.text()
+            self.worker_thread = WorkerThread(self.communicator)
+            self.worker_thread.data_received.connect(self.handle_data)
+            self.worker_thread.start()
+            self.status_label.setText("Server Status: Connected")
+            self.status_label.setStyleSheet("color: green")
+            logger.info("Acquisition started.")
+        except Exception as e:
+            logger.error(f"Failed to start acquisition: {e}")
+            self.show_error_message("Failed to start acquisition", str(e))
 
     def stop_acquisition(self):
         if self.worker_thread:
@@ -136,6 +168,7 @@ class PYNQScopeGUI(QMainWindow):
         self.status_label.setStyleSheet("color: red")
         if self.is_recording:
             self.toggle_recording()
+        logger.info("Acquisition stopped.")
 
     def handle_data(self, data_chunk):
         self.update_plot(data_chunk)
@@ -143,24 +176,30 @@ class PYNQScopeGUI(QMainWindow):
             self.csv_writer.writerows(data_chunk.reshape(-1, 1))
 
     def toggle_recording(self):
-        if not self.is_recording:
-            self.is_recording = True
-            self.record_button.setText("Stop Recording")
-            folder = self.data_folder_input.text()
-            if not os.path.exists(folder):
-                os.makedirs(folder)
-            filename = f"record_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-            filepath = os.path.join(folder, filename)
-            self.csv_file = open(filepath, "w", newline="")
-            self.csv_writer = csv.writer(self.csv_file)
-        else:
-            self.is_recording = False
-            self.record_button.setText("Record")
-            self.record_button.setChecked(False)
-            if self.csv_file:
-                self.csv_file.close()
-                self.csv_file = None
-                self.csv_writer = None
+        try:
+            if not self.is_recording:
+                self.is_recording = True
+                self.record_button.setText("Stop Recording")
+                folder = self.data_folder_input.text()
+                if not os.path.exists(folder):
+                    os.makedirs(folder)
+                filename = f"record_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+                filepath = os.path.join(folder, filename)
+                self.csv_file = open(filepath, "w", newline="")
+                self.csv_writer = csv.writer(self.csv_file)
+                logger.info(f"Recording started, saving to {filepath}")
+            else:
+                self.is_recording = False
+                self.record_button.setText("Record")
+                self.record_button.setChecked(False)
+                if self.csv_file:
+                    self.csv_file.close()
+                    self.csv_file = None
+                    self.csv_writer = None
+                logger.info("Recording stopped.")
+        except Exception as e:
+            logger.error(f"Failed to toggle recording: {e}")
+            self.show_error_message("Failed to toggle recording", str(e))
 
     def update_plot(self, data_chunk):
         # Update plot buffer
@@ -185,6 +224,7 @@ class PYNQScopeGUI(QMainWindow):
     def closeEvent(self, event):
         self.save_config()
         self.stop_acquisition()
+        logger.info("GUI closed.")
         super().closeEvent(event)
 
 class WorkerThread(QThread):

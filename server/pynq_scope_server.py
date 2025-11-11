@@ -1,9 +1,23 @@
 import asyncio
 import numpy as np
 import uvicorn
+import logging
+from logging.handlers import TimedRotatingFileHandler
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from typing import List, Dict, Any
 from dma_acquisition import dmaAcquisition
+
+import os
+
+# --- Configuration du Logging ---
+if not os.path.exists("logs"):
+    os.makedirs("logs")
+log_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+log_handler = TimedRotatingFileHandler("logs/server.log", when="midnight", interval=1, backupCount=7)
+log_handler.setFormatter(log_formatter)
+logger = logging.getLogger()
+logger.addHandler(log_handler)
+logger.setLevel(logging.INFO)
 
 # --- Configuration de l'Acquisition ---
 SAMPLE_RATE = 1000  # Echantillons/seconde
@@ -15,69 +29,93 @@ BITSTREAM = "activ_filter_one_7010.bit"
 
 # --- Classe pour gérer l'état et la diffusion ---
 class AcquisitionManager:
+    """Manages data acquisition, WebSocket connections, and data broadcasting."""
+
     def __init__(self):
+        """Initializes the AcquisitionManager."""
         self.active_connections: List[WebSocket] = []
         self.is_running: bool = False
         self.acquisition_task: asyncio.Task | None = None
 
     async def connect(self, websocket: WebSocket):
-        """Accepte un nouveau client WebSocket et l'ajoute à la liste."""
+        """
+        Accepts a new WebSocket connection and adds it to the list of active connections.
+
+        Args:
+            websocket: The WebSocket connection to accept.
+        """
         await websocket.accept()
         self.active_connections.append(websocket)
-        print(f"Client connecté. Total: {len(self.active_connections)}")
+        logger.info(f"Client connecté. Total: {len(self.active_connections)}")
 
     def disconnect(self, websocket: WebSocket):
-        """Retire un client WebSocket de la liste."""
+        """
+        Removes a WebSocket connection from the list of active connections.
+
+        Args:
+            websocket: The WebSocket connection to remove.
+        """
         self.active_connections.remove(websocket)
-        print(f"Client déconnecté. Total: {len(self.active_connections)}")
+        logger.info(f"Client déconnecté. Total: {len(self.active_connections)}")
 
     async def broadcast(self, data: bytes):
-        """Diffuse des données binaires à tous les clients connectés."""
-        # Utilise un 'gather' pour envoyer en parallèle à tous les clients
+        """
+        Broadcasts binary data to all connected WebSocket clients.
+
+        Args:
+            data: The binary data to broadcast.
+        """
         results = await asyncio.gather(
             *[client.send_bytes(data) for client in self.active_connections],
             return_exceptions=True
         )
-        # Gère les clients qui se seraient déconnectés pendant l'envoi
         for i, result in enumerate(results):
             if isinstance(result, Exception):
-                print(f"Erreur envoi client {i}: {result}. Déconnexion.")
-                # Note: La déconnexion est gérée par le 'finally' du /ws/data
+                logger.error(f"Erreur envoi client {i}: {result}. Déconnexion.")
 
     async def _acquisition_loop(self):
-        """Tâche asynchrone simulant l'acquisition de données."""
-        print("Début de l'acquisition...")
+        """
+        Asynchronous task that simulates data acquisition and broadcasts it to clients.
+        """
+        logger.info("Début de l'acquisition...")
         self.is_running = True
         try:
             while self.is_running:
-                # 1. Acquerir les données
-                array_0, _, _, _, _, _, _, _ = dma.acquire_data(SAMPLE_RATE, CHUNK_SIZE)
-
-                # 2. Sérialiser en binaire (critique pour la performance)
-                data_bytes = array_0.tobytes()
-
-                # 3. Diffuser les données
-                if self.active_connections:
-                    await self.broadcast(data_bytes)
-
-                # 4. Attendre pour simuler la fréquence d'échantillonnage
-                await asyncio.sleep(CHUNK_SIZE / SAMPLE_RATE)
+                try:
+                    array_0, _, _, _, _, _, _, _ = dma.acquire_data(SAMPLE_RATE, CHUNK_SIZE)
+                    data_bytes = array_0.tobytes()
+                    if self.active_connections:
+                        await self.broadcast(data_bytes)
+                    await asyncio.sleep(CHUNK_SIZE / SAMPLE_RATE)
+                except Exception as e:
+                    logger.error(f"Erreur dans la boucle d'acquisition: {e}")
+                    await asyncio.sleep(1)
         
         except asyncio.CancelledError:
-            print("Tâche d'acquisition annulée.")
+            logger.info("Tâche d'acquisition annulée.")
         finally:
             self.is_running = False
-            print("Fin de l'acquisition.")
+            logger.info("Fin de l'acquisition.")
 
     def start_acquisition(self):
-        """Démarre la tâche d'acquisition si elle n'est pas déjà en cours."""
+        """
+        Starts the data acquisition task if it is not already running.
+
+        Returns:
+            A dictionary with the status of the operation.
+        """
         if not self.is_running:
             self.acquisition_task = asyncio.create_task(self._acquisition_loop())
             return {"status": "Acquisition démarrée"}
         return {"status": "Acquisition déjà en cours"}
 
     def stop_acquisition(self):
-        """Arrête la tâche d'acquisition."""
+        """
+        Stops the data acquisition task.
+
+        Returns:
+            A dictionary with the status of the operation.
+        """
         if self.is_running and self.acquisition_task:
             self.acquisition_task.cancel()
             self.acquisition_task = None
@@ -85,13 +123,25 @@ class AcquisitionManager:
         return {"status": "Acquisition non démarrée"}
 
     async def handle_action(self, action: str, params: Dict[str, Any]):
-        """Gère une action de configuration."""
-        print(f"Action reçue: {action} avec les paramètres: {params}")
-        # Logique de distribution des actions
-        if action == "set_sample_rate":
-            global SAMPLE_RATE
-            SAMPLE_RATE = params.get("value", SAMPLE_RATE)
-        return {"status": "Action traitée", "action": action}
+        """
+        Handles a configuration action.
+
+        Args:
+            action: The action to handle.
+            params: The parameters for the action.
+
+        Returns:
+            A dictionary with the status of the operation.
+        """
+        logger.info(f"Action reçue: {action} avec les paramètres: {params}")
+        try:
+            if action == "set_sample_rate":
+                global SAMPLE_RATE
+                SAMPLE_RATE = params.get("value", SAMPLE_RATE)
+            return {"status": "Action traitée", "action": action}
+        except Exception as e:
+            logger.error(f"Erreur lors du traitement de l'action '{action}': {e}")
+            return {"status": "erreur", "message": str(e)}
 
 # --- Initialisation de FastAPI et du Manager ---
 app = FastAPI()
