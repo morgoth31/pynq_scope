@@ -229,6 +229,7 @@ class PYNQScopeGUI(QMainWindow):
             self.worker_thread = WorkerThread(self.communicator, mode, duration, rate)
             self.worker_thread.data_received.connect(self.handle_data)
             self.worker_thread.connection_status.connect(self.update_status_label)
+            self.worker_thread.finished.connect(self.on_acquisition_finished)
             self.worker_thread.start()
             self.start_stop_button.setText("Stop")
             logger.info("Acquisition started.")
@@ -238,16 +239,22 @@ class PYNQScopeGUI(QMainWindow):
             self.start_stop_button.setChecked(False)
 
     def stop_acquisition(self):
-        if self.worker_thread:
+        if self.worker_thread and self.worker_thread.isRunning():
             self.worker_thread.stop()
-            self.worker_thread.wait()
+            self.start_stop_button.setText("Stopping...")
+            self.start_stop_button.setEnabled(False)
+            logger.info("Stopping acquisition...")
+
+    def on_acquisition_finished(self):
+        """Handles UI cleanup after the worker thread has finished."""
         self.status_label.setText("Server Status: Disconnected")
         self.status_label.setStyleSheet("color: red")
         if self.is_recording:
             self.toggle_recording()
         self.start_stop_button.setText("Start")
         self.start_stop_button.setChecked(False)
-        logger.info("Acquisition stopped.")
+        self.worker_thread = None
+        logger.info("Acquisition finished and UI reset.")
 
     def handle_data(self, data_chunk):
         num_channels, chunk_size = data_chunk.shape
