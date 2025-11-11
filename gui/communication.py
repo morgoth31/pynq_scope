@@ -41,16 +41,22 @@ class ServerCommunicator:
                 print("Connexion WebSocket fermée par le serveur.")
                 break
 
-    async def control_api(self, action: str, params: dict = None):
-        url = f"http://{self.server_ip}/{action}"
+    async def control_api(self, action: str, params: dict = None, is_config: bool = False):
+        if is_config:
+            url = f"http://{self.server_ip}/configure"
+            payload = {"action": action, "params": params or {}}
+        else:
+            url = f"http://{self.server_ip}/{action}"
+            payload = params
+
         try:
             async with httpx.AsyncClient() as client:
-                if params:
-                    response = await client.post(url, json=params)
+                if payload:
+                    response = await client.post(url, json=payload)
                 else:
                     response = await client.post(url)
-                print(f"API [POST /{action}]: Réponse {response.status_code} "
-                      f"-> {response.json()}")
+
+                print(f"API [POST /{action}]: Réponse {response.status_code} -> {response.json()}")
                 return response.json()
         except httpx.ConnectError as e:
             print(f"Erreur de connexion API: {e}")

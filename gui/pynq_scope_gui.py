@@ -39,10 +39,10 @@ class PYNQScopeGUI(QMainWindow):
         # Buffers and plot curves for 8 channels
         self.plot_buffers = [np.zeros(1000, dtype=np.int16) for _ in range(8)]
         self.plot_curves = []
-        self.channel_colors = ['y', 'b', 'g', 'r', 'c', 'm', 'w', 'k'] # Colors for each channel
+        self.channel_colors = ['y', 'b', 'g', 'r', 'c', 'm', 'w', 'k'] # Default colors
 
-        self.create_widgets()
         self.load_config()
+        self.create_widgets()
 
         self.communicator = ServerCommunicator(self.server_ip_input.text())
         self.worker_thread = None
@@ -156,6 +156,7 @@ class PYNQScopeGUI(QMainWindow):
                 self.server_ip_input.setText(config.get("server_ip", "127.0.0.1:8000"))
                 self.data_folder_input.setText(config.get("data_folder", "./data"))
                 self.rate_slider.setValue(config.get("rate", 1000))
+                self.channel_colors = config.get("channel_colors", self.channel_colors)
                 logger.info("Configuration loaded from config.yml")
         except FileNotFoundError:
             self.server_ip_input.setText("127.0.0.1:8000")
@@ -168,7 +169,8 @@ class PYNQScopeGUI(QMainWindow):
         config = {
             "server_ip": self.server_ip_input.text(),
             "data_folder": self.data_folder_input.text(),
-            "rate": self.rate_slider.value()
+            "rate": self.rate_slider.value(),
+            "channel_colors": self.channel_colors
         }
         with open("config.yml", "w") as f:
             yaml.dump(config, f)
@@ -291,7 +293,7 @@ class PYNQScopeGUI(QMainWindow):
         super().closeEvent(event)
 
     def save_to_csv(self):
-        asyncio.run(self.communicator.control_api("save_to_csv"))
+        asyncio.run(self.communicator.control_api("save_to_csv", is_config=True))
 
 class WorkerThread(QThread):
     data_received = pyqtSignal(np.ndarray)
@@ -302,26 +304,38 @@ class WorkerThread(QThread):
         self.communicator = communicator
         self.mode = mode
         self.duration = duration
+        self.loop = asyncio.new_event_loop()
 
     def run(self):
-        asyncio.run(self.run_async())
+        asyncio.set_event_loop(self.loop)
+        self.loop.run_until_complete(self.run_async())
 
     async def run_async(self):
-        await self.communicator.control_api("start", params={"mode": self.mode, "duration": self.duration})
+        start_response = await self.communicator.control_api("start", params={"mode": self.mode, "duration": self.duration})
+        if not start_response:
+            self.connection_status.emit(False, "Failed to start acquisition")
+            return
+
         if await self.communicator.connect():
-            status = await self.communicator.get_status()
-            if status and status.get("running"):
-                self.connection_status.emit(True, "Connected")
-                await self.communicator.data_receiver(self.handle_data)
-            else:
-                self.connection_status.emit(False, "Server not running")
+            self.connection_status.emit(True, "Connected")
+            await self.communicator.data_receiver(self.handle_data)
         else:
             self.connection_status.emit(False, "Connection failed")
 
+        # Final status update after disconnection or end of acquisition
+        status = await self.communicator.get_status()
+        if status:
+            running_status = "Running" if status.get("running") else "Stopped"
+            self.connection_status.emit(False, f"Disconnected ({running_status})")
+        else:
+            self.connection_status.emit(False, "Disconnected")
+
     def stop(self):
         self.communicator.stop_event.set()
-        asyncio.run(self.communicator.control_api("stop"))
-        asyncio.run(self.communicator.disconnect())
+        if self.loop.is_running():
+            asyncio.run_coroutine_threadsafe(self.communicator.control_api("stop"), self.loop).result()
+            asyncio.run_coroutine_threadsafe(self.communicator.disconnect(), self.loop).result()
+        self.loop.call_soon_threadsafe(self.loop.stop)
 
     def handle_data(self, data):
         self.data_received.emit(data)
