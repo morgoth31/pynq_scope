@@ -2,6 +2,22 @@
 
 This document describes how to add new configurations and actions to the PYNQ Scope Server.
 
+## Logging
+
+The server and GUI both generate log files that can be used for debugging and monitoring. The log files are located in the `logs` directory.
+
+* `logs/server.log`: Contains logs from the server.
+* `logs/gui.log`: Contains logs from the GUI.
+
+The logs are rotated daily, and the last 7 days of logs are kept.
+
+## Error Handling
+
+The server and GUI have been improved to handle errors more gracefully.
+
+* **Server:** The server will catch and log exceptions that occur during data acquisition and action handling.
+* **GUI:** The GUI will display a message box when an error occurs, and will log the error to the GUI log file.
+
 ## Adding New Configurations and Actions
 
 To add a new configuration or action to the server, you need to modify the `pynq_scope_server.py` file.
@@ -15,7 +31,7 @@ In the `AcquisitionManager` class, add a new `if` condition to the `handle_actio
 ```python
 async def handle_action(self, action: str, params: Dict[str, Any]):
     """Gère une action de configuration."""
-    print(f"Action reçue: {action} avec les paramètres: {params}")
+    logger.info(f"Action reçue: {action} avec les paramètres: {params}")
     # Logique de distribution des actions
     if action == "set_sample_rate":
         # Ici, la logique pour changer SAMPLE_RATE
