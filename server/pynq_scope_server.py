@@ -9,6 +9,9 @@ from dma_acquisition import dmaAcquisition
 SAMPLE_RATE = 1000  # Echantillons/seconde
 CHUNK_SIZE = 100    # Echantillons par envoi
 DTYPE = np.int16    # Type de données des échantillons
+BITSTREAM = "activ_filter_one_7010.bit"
+
+
 
 # --- Classe pour gérer l'état et la diffusion ---
 class AcquisitionManager:
@@ -93,7 +96,7 @@ class AcquisitionManager:
 # --- Initialisation de FastAPI et du Manager ---
 app = FastAPI()
 manager = AcquisitionManager()
-dma = dmaAcquisition()
+dma = dmaAcquisition("activ_filter_one_7010.bit")
 
 # --- Points de terminaison (Endpoints) ---
 
