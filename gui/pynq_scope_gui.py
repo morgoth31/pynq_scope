@@ -6,7 +6,7 @@ import os
 import logging
 from logging.handlers import TimedRotatingFileHandler
 from datetime import datetime
-from PyQt6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QLineEdit, QSlider, QMessageBox
+from PyQt6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QLineEdit, QSlider, QMessageBox, QCheckBox, QRadioButton
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 import yaml
 import numpy as np
@@ -42,7 +42,11 @@ class PYNQScopeGUI(QMainWindow):
         self.communicator = ServerCommunicator(self.server_ip_input.text())
         self.worker_thread = None
         
-        self.plot_buffer = np.zeros(1000, dtype=np.int16)
+        # Buffers and plot curves for 8 channels
+        self.plot_buffers = [np.zeros(1000, dtype=np.int16) for _ in range(8)]
+        self.plot_curves = []
+        self.channel_colors = ['y', 'b', 'g', 'r', 'c', 'm', 'w', 'k'] # Colors for each channel
+
         self.last_update_time = time.time()
         self.chunk_count = 0
         self.data_amount = 0
@@ -60,7 +64,21 @@ class PYNQScopeGUI(QMainWindow):
         
         self.plot_widget = pg.PlotWidget()
         self.layout.addWidget(self.plot_widget)
-        self.plot_curve = self.plot_widget.plot(pen='y')
+
+        # Create plot curves for each channel
+        for i in range(8):
+            curve = self.plot_widget.plot(pen=self.channel_colors[i], name=f"Channel {i}")
+            self.plot_curves.append(curve)
+
+        self.channel_checkboxes = []
+        self.channels_layout = QHBoxLayout()
+        for i in range(8):
+            checkbox = QCheckBox(f"Channel {i}")
+            checkbox.setChecked(True)
+            checkbox.stateChanged.connect(self.update_plot_visibility)
+            self.channel_checkboxes.append(checkbox)
+            self.channels_layout.addWidget(checkbox)
+        self.layout.addLayout(self.channels_layout)
 
         self.perf_layout = QHBoxLayout()
         self.refresh_rate_label = QLabel("Refresh Rate: 0 Hz")
@@ -77,10 +95,28 @@ class PYNQScopeGUI(QMainWindow):
         self.record_button = QPushButton("Record")
         self.record_button.setCheckable(True)
         self.record_button.clicked.connect(self.toggle_recording)
+
+        self.save_button = QPushButton("Save to CSV")
+        self.save_button.clicked.connect(self.save_to_csv)
+
         self.controls_layout.addWidget(self.start_button)
         self.controls_layout.addWidget(self.stop_button)
         self.controls_layout.addWidget(self.record_button)
+        self.controls_layout.addWidget(self.save_button)
         self.layout.addLayout(self.controls_layout)
+
+        self.acquisition_mode_layout = QHBoxLayout()
+        self.auto_mode_radio = QRadioButton("Auto")
+        self.auto_mode_radio.setChecked(True)
+        self.timed_mode_radio = QRadioButton("Timed (s)")
+        self.timed_duration_input = QLineEdit("10")
+        self.timed_duration_input.setEnabled(False)
+        self.timed_mode_radio.toggled.connect(self.timed_duration_input.setEnabled)
+
+        self.acquisition_mode_layout.addWidget(self.auto_mode_radio)
+        self.acquisition_mode_layout.addWidget(self.timed_mode_radio)
+        self.acquisition_mode_layout.addWidget(self.timed_duration_input)
+        self.layout.addLayout(self.acquisition_mode_layout)
 
         self.config_layout = QVBoxLayout()
         
@@ -159,7 +195,14 @@ class PYNQScopeGUI(QMainWindow):
     def start_acquisition(self):
         try:
             self.communicator.server_ip = self.server_ip_input.text()
-            self.worker_thread = WorkerThread(self.communicator)
+
+            mode = "auto"
+            duration = 0
+            if self.timed_mode_radio.isChecked():
+                mode = "timed"
+                duration = int(self.timed_duration_input.text())
+
+            self.worker_thread = WorkerThread(self.communicator, mode, duration)
             self.worker_thread.data_received.connect(self.handle_data)
             self.worker_thread.connection_status.connect(self.update_status_label)
             self.worker_thread.start()
@@ -179,9 +222,13 @@ class PYNQScopeGUI(QMainWindow):
         logger.info("Acquisition stopped.")
 
     def handle_data(self, data_chunk):
-        self.update_plot(data_chunk)
+        num_channels, chunk_size = data_chunk.shape
+        for i in range(num_channels):
+            self.update_plot(i, data_chunk[i])
+
         if self.is_recording:
-            self.csv_writer.writerows(data_chunk.reshape(-1, 1))
+            # Transpose and write data for CSV recording
+            self.csv_writer.writerows(data_chunk.T)
 
     def toggle_recording(self):
         try:
@@ -195,6 +242,8 @@ class PYNQScopeGUI(QMainWindow):
                 filepath = os.path.join(folder, filename)
                 self.csv_file = open(filepath, "w", newline="")
                 self.csv_writer = csv.writer(self.csv_file)
+                # Write header for CSV
+                self.csv_writer.writerow([f"Channel {i}" for i in range(8)])
                 logger.info(f"Recording started, saving to {filepath}")
             else:
                 self.is_recording = False
@@ -203,17 +252,23 @@ class PYNQScopeGUI(QMainWindow):
                 if self.csv_file:
                     self.csv_file.close()
                     self.csv_file = None
-                    self.csv_writer = None
                 logger.info("Recording stopped.")
         except Exception as e:
             logger.error(f"Failed to toggle recording: {e}")
             self.show_error_message("Failed to toggle recording", str(e))
 
-    def update_plot(self, data_chunk):
-        # Update plot buffer
-        self.plot_buffer = np.roll(self.plot_buffer, -len(data_chunk))
-        self.plot_buffer[-len(data_chunk):] = data_chunk
-        self.plot_curve.setData(self.plot_buffer)
+    def update_plot_visibility(self):
+        for i, checkbox in enumerate(self.channel_checkboxes):
+            if checkbox.isChecked():
+                self.plot_curves[i].show()
+            else:
+                self.plot_curves[i].hide()
+
+    def update_plot(self, channel_index, data_chunk):
+        # Update plot buffer for the specific channel
+        self.plot_buffers[channel_index] = np.roll(self.plot_buffers[channel_index], -len(data_chunk))
+        self.plot_buffers[channel_index][-len(data_chunk):] = data_chunk
+        self.plot_curves[channel_index].setData(self.plot_buffers[channel_index])
         
         # Update performance metrics
         self.chunk_count += 1
@@ -235,19 +290,24 @@ class PYNQScopeGUI(QMainWindow):
         logger.info("GUI closed.")
         super().closeEvent(event)
 
+    def save_to_csv(self):
+        asyncio.run(self.communicator.control_api("save_to_csv"))
+
 class WorkerThread(QThread):
     data_received = pyqtSignal(np.ndarray)
     connection_status = pyqtSignal(bool, str)
 
-    def __init__(self, communicator):
+    def __init__(self, communicator, mode="auto", duration=0):
         super().__init__()
         self.communicator = communicator
+        self.mode = mode
+        self.duration = duration
 
     def run(self):
         asyncio.run(self.run_async())
 
     async def run_async(self):
-        await self.communicator.control_api("start")
+        await self.communicator.control_api("start", params={"mode": self.mode, "duration": self.duration})
         if await self.communicator.connect():
             status = await self.communicator.get_status()
             if status and status.get("running"):

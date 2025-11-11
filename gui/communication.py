@@ -32,7 +32,8 @@ class ServerCommunicator:
         while not self.stop_event.is_set():
             try:
                 data_bytes = await asyncio.wait_for(self.websocket.recv(), timeout=1.0)
-                data_chunk = np.frombuffer(data_bytes, dtype=np.int16)
+                # Reshape the data into 8 channels
+                data_chunk = np.frombuffer(data_bytes, dtype=np.int16).reshape(8, -1)
                 data_callback(data_chunk)
             except asyncio.TimeoutError:
                 pass
@@ -40,11 +41,14 @@ class ServerCommunicator:
                 print("Connexion WebSocket fermée par le serveur.")
                 break
 
-    async def control_api(self, action: str):
+    async def control_api(self, action: str, params: dict = None):
         url = f"http://{self.server_ip}/{action}"
         try:
             async with httpx.AsyncClient() as client:
-                response = await client.post(url)
+                if params:
+                    response = await client.post(url, json=params)
+                else:
+                    response = await client.post(url)
                 print(f"API [POST /{action}]: Réponse {response.status_code} "
                       f"-> {response.json()}")
                 return response.json()
