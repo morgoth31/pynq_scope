@@ -6,7 +6,8 @@ import argparse
 from logging.handlers import TimedRotatingFileHandler
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from typing import List, Dict, Any
-from dma_acquisition import dmaAcquisition
+from server.dma_acquisition import dmaAcquisition
+import time
 
 import os
 
@@ -84,7 +85,6 @@ class AcquisitionManager:
         Asynchronous task that simulates data acquisition and broadcasts it to clients.
         """
         logger.info(f"Début de l'acquisition en mode {mode} pour une durée de {duration}s...")
-        self.is_running = True
         self.data_buffer.clear()
 
         start_time = time.time()
@@ -127,7 +127,6 @@ class AcquisitionManager:
         except asyncio.CancelledError:
             logger.info("Tâche d'acquisition annulée.")
         finally:
-            self.is_running = False
             logger.info("Fin de l'acquisition.")
             if mode == "timed":
                 asyncio.create_task(self.save_recorded_data(self.data_buffer))
@@ -155,6 +154,7 @@ class AcquisitionManager:
             A dictionary with the status of the operation.
         """
         if not self.is_running:
+            self.is_running = True
             self.acquisition_task = asyncio.create_task(self._acquisition_loop(mode, duration))
             return {"status": "Acquisition démarrée"}
         return {"status": "Acquisition déjà en cours"}
@@ -167,6 +167,7 @@ class AcquisitionManager:
             A dictionary with the status of the operation.
         """
         if self.is_running and self.acquisition_task:
+            self.is_running = False
             self.acquisition_task.cancel()
             self.acquisition_task = None
             return {"status": "Acquisition arrêtée"}
@@ -189,7 +190,7 @@ class AcquisitionManager:
                 global SAMPLE_RATE
                 SAMPLE_RATE = params.get("value", SAMPLE_RATE)
             elif action == "save_to_csv":
-                asyncio.create_task(self.save_recorded_data(self.data_buffer))
+                await self.save_recorded_data(self.data_buffer)
 
             return {"status": "Action traitée", "action": action}
         except Exception as e:
