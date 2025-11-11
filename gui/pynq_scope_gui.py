@@ -6,8 +6,9 @@ import os
 import logging
 from logging.handlers import TimedRotatingFileHandler
 from datetime import datetime
-from PyQt6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QLineEdit, QSlider, QMessageBox, QCheckBox, QRadioButton
+from PyQt6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QLineEdit, QSlider, QMessageBox, QCheckBox, QRadioButton, QColorDialog
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtGui import QColor
 import yaml
 import numpy as np
 import pyqtgraph as pg
@@ -80,6 +81,10 @@ class PYNQScopeGUI(QMainWindow):
             checkbox.stateChanged.connect(self.update_plot_visibility)
             self.channel_checkboxes.append(checkbox)
             self.channels_layout.addWidget(checkbox)
+
+            color_button = QPushButton("Color")
+            color_button.clicked.connect(lambda _, ch=i: self.open_color_dialog(ch))
+            self.channels_layout.addWidget(color_button)
         self.layout.addLayout(self.channels_layout)
 
         self.perf_layout = QHBoxLayout()
@@ -90,10 +95,9 @@ class PYNQScopeGUI(QMainWindow):
         self.layout.addLayout(self.perf_layout)
 
         self.controls_layout = QHBoxLayout()
-        self.start_button = QPushButton("Start")
-        self.start_button.clicked.connect(self.start_acquisition)
-        self.stop_button = QPushButton("Stop")
-        self.stop_button.clicked.connect(self.stop_acquisition)
+        self.start_stop_button = QPushButton("Start")
+        self.start_stop_button.setCheckable(True)
+        self.start_stop_button.clicked.connect(self.toggle_acquisition)
         self.record_button = QPushButton("Record")
         self.record_button.setCheckable(True)
         self.record_button.clicked.connect(self.toggle_recording)
@@ -101,8 +105,7 @@ class PYNQScopeGUI(QMainWindow):
         self.save_button = QPushButton("Save to CSV")
         self.save_button.clicked.connect(self.save_to_csv)
 
-        self.controls_layout.addWidget(self.start_button)
-        self.controls_layout.addWidget(self.stop_button)
+        self.controls_layout.addWidget(self.start_stop_button)
         self.controls_layout.addWidget(self.record_button)
         self.controls_layout.addWidget(self.save_button)
         self.layout.addLayout(self.controls_layout)
@@ -133,22 +136,12 @@ class PYNQScopeGUI(QMainWindow):
         self.config_layout.addWidget(self.data_folder_input)
 
         self.rate_label = QLabel("Rate:")
-        self.rate_slider = QSlider(Qt.Orientation.Horizontal)
-        self.rate_slider.setRange(1, 10000)
-        self.rate_slider.setValue(1000)
-        self.rate_slider.valueChanged.connect(self.update_rate_label)
-        self.rate_value_label = QLabel("1000")
+        self.rate_input = QLineEdit()
         self.config_layout.addWidget(self.rate_label)
-        self.config_layout.addWidget(self.rate_slider)
-        self.config_layout.addWidget(self.rate_value_label)
+        self.config_layout.addWidget(self.rate_input)
         
         self.layout.addLayout(self.config_layout)
         logger.info("Widgets created.")
-
-    def update_rate_label(self, value):
-        """Updates the rate label when the slider is moved."""
-        self.rate_value_label.setText(str(value))
-        logger.debug(f"Rate slider updated to {value}")
 
     def _load_config_values(self):
         """Loads configuration from config.yml into an instance variable."""
@@ -170,19 +163,32 @@ class PYNQScopeGUI(QMainWindow):
         """Applies the loaded configuration values to the UI widgets."""
         self.server_ip_input.setText(self.config.get("server_ip", "127.0.0.1:8000"))
         self.data_folder_input.setText(self.config.get("data_folder", "./data"))
-        self.rate_slider.setValue(self.config.get("rate", 1000))
+        self.rate_input.setText(str(self.config.get("rate", 1000)))
+
+    def open_color_dialog(self, channel_index):
+        """Opens a color dialog to select a color for the channel."""
+        color = QColorDialog.getColor()
+        if color.isValid():
+            self.channel_colors[channel_index] = color.name()
+            self.plot_curves[channel_index].setPen(self.channel_colors[channel_index])
+            logger.info(f"Channel {channel_index} color changed to {color.name()}")
 
     def save_config(self):
         """Saves the current configuration to config.yml."""
-        config = {
-            "server_ip": self.server_ip_input.text(),
-            "data_folder": self.data_folder_input.text(),
-            "rate": self.rate_slider.value(),
-            "channel_colors": self.channel_colors
-        }
-        with open("config.yml", "w") as f:
-            yaml.dump(config, f)
-        logger.info("Configuration saved to config.yml")
+        try:
+            rate = int(self.rate_input.text())
+            config = {
+                "server_ip": self.server_ip_input.text(),
+                "data_folder": self.data_folder_input.text(),
+                "rate": rate,
+                "channel_colors": self.channel_colors
+            }
+            with open("config.yml", "w") as f:
+                yaml.dump(config, f)
+            logger.info("Configuration saved to config.yml")
+        except ValueError:
+            self.show_error_message("Invalid Rate", "The rate must be an integer.")
+            logger.error("Failed to save config: invalid rate value.")
 
     def show_error_message(self, title, message):
         """Displays an error message in a message box."""
@@ -202,6 +208,12 @@ class PYNQScopeGUI(QMainWindow):
             self.status_label.setText(f"Server Status: {message}")
             self.status_label.setStyleSheet("color: red")
 
+    def toggle_acquisition(self):
+        if self.start_stop_button.isChecked():
+            self.start_acquisition()
+        else:
+            self.stop_acquisition()
+
     def start_acquisition(self):
         try:
             self.communicator.server_ip = self.server_ip_input.text()
@@ -212,14 +224,18 @@ class PYNQScopeGUI(QMainWindow):
                 mode = "timed"
                 duration = int(self.timed_duration_input.text())
 
-            self.worker_thread = WorkerThread(self.communicator, mode, duration)
+            rate = int(self.rate_input.text())
+
+            self.worker_thread = WorkerThread(self.communicator, mode, duration, rate)
             self.worker_thread.data_received.connect(self.handle_data)
             self.worker_thread.connection_status.connect(self.update_status_label)
             self.worker_thread.start()
+            self.start_stop_button.setText("Stop")
             logger.info("Acquisition started.")
         except Exception as e:
             logger.error(f"Failed to start acquisition: {e}")
             self.show_error_message("Failed to start acquisition", str(e))
+            self.start_stop_button.setChecked(False)
 
     def stop_acquisition(self):
         if self.worker_thread:
@@ -229,6 +245,8 @@ class PYNQScopeGUI(QMainWindow):
         self.status_label.setStyleSheet("color: red")
         if self.is_recording:
             self.toggle_recording()
+        self.start_stop_button.setText("Start")
+        self.start_stop_button.setChecked(False)
         logger.info("Acquisition stopped.")
 
     def handle_data(self, data_chunk):
@@ -287,9 +305,9 @@ class PYNQScopeGUI(QMainWindow):
         elapsed_time = current_time - self.last_update_time
         if elapsed_time > 1:
             refresh_rate = self.chunk_count / elapsed_time
-            bandwidth = self.data_amount / elapsed_time
+            bandwidth = self.data_amount / elapsed_time / 1024  # Convert to kB/s
             self.refresh_rate_label.setText(f"Refresh Rate: {refresh_rate:.2f} Hz")
-            self.bandwidth_label.setText(f"Bandwidth: {bandwidth:.2f} B/s")
+            self.bandwidth_label.setText(f"Bandwidth: {bandwidth:.2f} kB/s")
             self.chunk_count = 0
             self.data_amount = 0
             self.last_update_time = current_time
@@ -307,11 +325,12 @@ class WorkerThread(QThread):
     data_received = pyqtSignal(np.ndarray)
     connection_status = pyqtSignal(bool, str)
 
-    def __init__(self, communicator, mode="auto", duration=0):
+    def __init__(self, communicator, mode="auto", duration=0, rate=1000):
         super().__init__()
         self.communicator = communicator
         self.mode = mode
         self.duration = duration
+        self.rate = rate
         self.loop = asyncio.new_event_loop()
 
     def run(self):
@@ -319,7 +338,7 @@ class WorkerThread(QThread):
         self.loop.run_until_complete(self.run_async())
 
     async def run_async(self):
-        start_response = await self.communicator.control_api("start", params={"mode": self.mode, "duration": self.duration})
+        start_response = await self.communicator.control_api("start", params={"mode": self.mode, "duration": self.duration, "rate": self.rate})
         if not start_response:
             self.connection_status.emit(False, "Failed to start acquisition")
             return
