@@ -1,0 +1,6 @@
+server_ip: "127.0.0.1:8000"
+data_folder: "./data"
+sample_rate: 1000
+chunk_size: 100
+dtype: "int16"
+rate: 1000
