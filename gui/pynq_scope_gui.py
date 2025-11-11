@@ -335,7 +335,10 @@ class WorkerThread(QThread):
 
     def run(self):
         asyncio.set_event_loop(self.loop)
-        self.loop.run_until_complete(self.run_async())
+        try:
+            self.loop.run_until_complete(self.run_async())
+        finally:
+            self.loop.close()
 
     async def run_async(self):
         start_response = await self.communicator.control_api("start", params={"mode": self.mode, "duration": self.duration, "rate": self.rate})
@@ -360,9 +363,12 @@ class WorkerThread(QThread):
     def stop(self):
         self.communicator.stop_event.set()
         if self.loop.is_running():
-            asyncio.run_coroutine_threadsafe(self.communicator.control_api("stop"), self.loop)
-            asyncio.run_coroutine_threadsafe(self.communicator.disconnect(), self.loop)
-        self.loop.call_soon_threadsafe(self.loop.stop)
+            self.loop.call_soon_threadsafe(self._async_stop)
+
+    def _async_stop(self):
+        asyncio.create_task(self.communicator.control_api("stop"))
+        asyncio.create_task(self.communicator.disconnect())
+        self.loop.stop()
 
     def handle_data(self, data):
         self.data_received.emit(data)
