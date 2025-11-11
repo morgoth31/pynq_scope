@@ -40,11 +40,13 @@ class PYNQScopeGUI(QMainWindow):
         self.plot_buffers = [np.zeros(1000, dtype=np.int16) for _ in range(8)]
         self.plot_curves = []
         self.channel_colors = ['y', 'b', 'g', 'r', 'c', 'm', 'w', 'k'] # Default colors
+        self.config = {}
 
-        self.load_config()
+        self._load_config_values()
         self.create_widgets()
+        self._apply_config_to_widgets()
 
-        self.communicator = ServerCommunicator(self.server_ip_input.text())
+        self.communicator = ServerCommunicator(self.config.get("server_ip"))
         self.worker_thread = None
         
         self.last_update_time = time.time()
@@ -148,21 +150,27 @@ class PYNQScopeGUI(QMainWindow):
         self.rate_value_label.setText(str(value))
         logger.debug(f"Rate slider updated to {value}")
 
-    def load_config(self):
-        """Loads the configuration from config.yml."""
+    def _load_config_values(self):
+        """Loads configuration from config.yml into an instance variable."""
         try:
             with open("config.yml", "r") as f:
-                config = yaml.safe_load(f)
-                self.server_ip_input.setText(config.get("server_ip", "127.0.0.1:8000"))
-                self.data_folder_input.setText(config.get("data_folder", "./data"))
-                self.rate_slider.setValue(config.get("rate", 1000))
-                self.channel_colors = config.get("channel_colors", self.channel_colors)
+                self.config = yaml.safe_load(f)
+                self.channel_colors = self.config.get("channel_colors", self.channel_colors)
                 logger.info("Configuration loaded from config.yml")
         except FileNotFoundError:
-            self.server_ip_input.setText("127.0.0.1:8000")
-            self.data_folder_input.setText("./data")
-            self.rate_slider.setValue(1000)
             logger.warning("config.yml not found, using default configuration.")
+            self.config = {
+                "server_ip": "127.0.0.1:8000",
+                "data_folder": "./data",
+                "rate": 1000,
+                "channel_colors": self.channel_colors
+            }
+
+    def _apply_config_to_widgets(self):
+        """Applies the loaded configuration values to the UI widgets."""
+        self.server_ip_input.setText(self.config.get("server_ip", "127.0.0.1:8000"))
+        self.data_folder_input.setText(self.config.get("data_folder", "./data"))
+        self.rate_slider.setValue(self.config.get("rate", 1000))
 
     def save_config(self):
         """Saves the current configuration to config.yml."""
