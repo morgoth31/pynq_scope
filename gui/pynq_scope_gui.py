@@ -341,34 +341,30 @@ class WorkerThread(QThread):
             self.loop.close()
 
     async def run_async(self):
-        start_response = await self.communicator.control_api("start", params={"mode": self.mode, "duration": self.duration, "rate": self.rate})
-        if not start_response:
-            self.connection_status.emit(False, "Failed to start acquisition")
-            return
+        try:
+            start_response = await self.communicator.control_api("start", params={"mode": self.mode, "duration": self.duration, "rate": self.rate})
+            if not start_response:
+                self.connection_status.emit(False, "Failed to start acquisition")
+                return
 
-        if await self.communicator.connect():
-            self.connection_status.emit(True, "Connected")
-            await self.communicator.data_receiver(self.handle_data)
-        else:
-            self.connection_status.emit(False, "Connection failed")
-
-        # Final status update after disconnection or end of acquisition
-        status = await self.communicator.get_status()
-        if status:
-            running_status = "Running" if status.get("running") else "Stopped"
-            self.connection_status.emit(False, f"Disconnected ({running_status})")
-        else:
-            self.connection_status.emit(False, "Disconnected")
+            if await self.communicator.connect():
+                self.connection_status.emit(True, "Connected")
+                await self.communicator.data_receiver(self.handle_data)
+            else:
+                self.connection_status.emit(False, "Connection failed")
+        finally:
+            # Final status update after disconnection or end of acquisition
+            await self.communicator.control_api("stop")
+            await self.communicator.disconnect()
+            status = await self.communicator.get_status()
+            if status:
+                running_status = "Running" if status.get("running") else "Stopped"
+                self.connection_status.emit(False, f"Disconnected ({running_status})")
+            else:
+                self.connection_status.emit(False, "Disconnected")
 
     def stop(self):
         self.communicator.stop_event.set()
-        if self.loop.is_running():
-            self.loop.call_soon_threadsafe(self._async_stop)
-
-    def _async_stop(self):
-        asyncio.create_task(self.communicator.control_api("stop"))
-        asyncio.create_task(self.communicator.disconnect())
-        self.loop.stop()
 
     def handle_data(self, data):
         self.data_received.emit(data)
