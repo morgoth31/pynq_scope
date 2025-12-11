@@ -1,8 +1,10 @@
 import sys
+import threading
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
-from PyQt6.QtCore import Qt
+import wx
 
 # Mock 'pynq' to avoid ImportError and dependencies on hardware
 sys.modules['pynq'] = MagicMock()
@@ -11,83 +13,122 @@ sys.modules['pynq'] = MagicMock()
 from gui import pynq_scope_gui
 from gui import communication
 
+@pytest.fixture(scope='session')
+def wx_app():
+    """
+    Ensure a wx.App exists for the tests.
+    """
+    app = wx.App(False)
+    yield app
+    app.Destroy()
+
 @pytest.fixture
-def gui_app(qtbot):
+def gui_frame(wx_app):
     """
     Provides a clean instance of the PYNQScopeGUI for each test.
     """
     with patch('gui.pynq_scope_gui.ServerCommunicator'):
-        window = pynq_scope_gui.PYNQScopeGUI()
-        qtbot.addWidget(window)
-        yield window
+        frame = pynq_scope_gui.PYNQScopeGUI()
+        frame.Show()
+        yield frame
+        frame.Close()
+        wx.Yield() # Process pending events
 
-def test_toggle_channel_visibility(gui_app, qtbot):
+def test_toggle_channel_visibility(gui_frame):
     """Test that toggling a channel checkbox updates the plot visibility."""
     channel_index = 0
-    checkbox = gui_app.channel_checkboxes[channel_index]
-    assert checkbox.isChecked()
+    checkbox = gui_frame.channel_checkboxes[channel_index]
+    assert checkbox.GetValue()
 
     # Uncheck the checkbox directly
-    checkbox.setChecked(False)
-    assert not checkbox.isChecked()
-    assert not gui_app.plot_curves[channel_index].isVisible()
+    checkbox.SetValue(False)
+    # Trigger event manually since programmatic change doesn't always trigger it in wx
+    event = wx.CommandEvent(wx.EVT_CHECKBOX.typeId, checkbox.GetId())
+    event.SetInt(0)
+    checkbox.GetEventHandler().ProcessEvent(event)
+    
+    assert not checkbox.GetValue()
+    assert not gui_frame.lines[channel_index].get_visible()
 
     # Check the checkbox again
-    checkbox.setChecked(True)
-    assert checkbox.isChecked()
-    assert gui_app.plot_curves[channel_index].isVisible()
+    checkbox.SetValue(True)
+    event = wx.CommandEvent(wx.EVT_CHECKBOX.typeId, checkbox.GetId())
+    event.SetInt(1)
+    checkbox.GetEventHandler().ProcessEvent(event)
+    
+    assert checkbox.GetValue()
+    assert gui_frame.lines[channel_index].get_visible()
 
 @patch('gui.pynq_scope_gui.WorkerThread')
-def test_start_acquisition_success(mock_worker_thread, gui_app, qtbot):
+def test_start_acquisition_success(mock_worker_thread_cls, gui_frame):
     """Test the start button's behavior on a successful connection."""
-    gui_app.start_button.click()
+    # Mock the worker thread instance
+    mock_thread_instance = mock_worker_thread_cls.return_value
+    mock_thread_instance.start = MagicMock()
 
-    mock_worker_thread.assert_called_once()
-    gui_app.worker_thread.start.assert_called_once()
+    # Simulate button click
+    gui_frame.start_stop_button.SetValue(True)
+    gui_frame.toggle_acquisition(None)
 
-    # Get the callback function passed to connect() and call it
-    connected_slot = gui_app.worker_thread.connection_status.connect.call_args.args[0]
-    connected_slot(True, "Connected")
+    mock_worker_thread_cls.assert_called_once()
+    mock_thread_instance.start.assert_called_once()
+    
+    # Simulate status update callback from thread
+    gui_frame.update_status_label(True, "Connected")
+    wx.Yield() # Process UI updates
 
-    assert "Server Status: Connected" in gui_app.status_label.text()
-    assert "color: green" in gui_app.status_label.styleSheet()
+    assert "Server Status: Connected" in gui_frame.status_label.GetLabel()
+    # Check color by checking foreground color of the label
+    # Note: wx.Colour comparison might need explicit check
+    assert gui_frame.status_label.GetForegroundColour() == wx.GREEN
 
 @patch('gui.pynq_scope_gui.WorkerThread')
-def test_start_acquisition_failure(mock_worker_thread, gui_app, qtbot):
+def test_start_acquisition_failure(mock_worker_thread_cls, gui_frame):
     """Test the start button's behavior on a failed connection."""
-    gui_app.start_button.click()
+    mock_thread_instance = mock_worker_thread_cls.return_value
+    
+    # Simulate button click
+    gui_frame.start_stop_button.SetValue(True)
+    gui_frame.toggle_acquisition(None)
 
-    mock_worker_thread.assert_called_once()
-    gui_app.worker_thread.start.assert_called_once()
+    mock_worker_thread_cls.assert_called_once()
+    mock_thread_instance.start.assert_called_once()
 
-    # Get the callback function passed to connect() and call it
-    connected_slot = gui_app.worker_thread.connection_status.connect.call_args.args[0]
-    connected_slot(False, "Connection failed")
+    # Simulate callback
+    gui_frame.update_status_label(False, "Connection failed")
+    wx.Yield()
 
-    assert "Server Status: Connection failed" in gui_app.status_label.text()
-    assert "color: red" in gui_app.status_label.styleSheet()
+    assert "Server Status: Connection failed" in gui_frame.status_label.GetLabel()
+    assert gui_frame.status_label.GetForegroundColour() == wx.RED
 
-@patch('gui.pynq_scope_gui.QMessageBox')
-def test_start_acquisition_exception(mock_message_box, gui_app, qtbot):
+@patch('gui.pynq_scope_gui.wx.MessageBox')
+def test_start_acquisition_exception(mock_message_box, gui_frame):
     """Test that an exception during start_acquisition shows an error message."""
     with patch('gui.pynq_scope_gui.WorkerThread', side_effect=Exception("Test Error")):
-        gui_app.start_button.click()
-        # Assert that a QMessageBox instance was created and shown
-        mock_message_box.return_value.exec.assert_called_once()
-        assert "Server Status: Disconnected" in gui_app.status_label.text()
+        gui_frame.start_stop_button.SetValue(True)
+        gui_frame.toggle_acquisition(None)
+        
+        wx.Yield() # Allow CallAfter to process
+        
+        # Assert that a MessageBox was called
+        mock_message_box.assert_called_once()
+        assert "Server Status: Disconnected" in gui_frame.status_label.GetLabel()
 
 @patch('gui.pynq_scope_gui.WorkerThread')
-def test_stop_acquisition(mock_worker_thread, gui_app, qtbot):
+def test_stop_acquisition(mock_worker_thread_cls, gui_frame):
     """Test the stop button's behavior."""
     # Start acquisition first
-    gui_app.start_button.click()
-    mock_worker_thread.assert_called_once()
-    gui_app.worker_thread.start.assert_called_once()
+    mock_thread_instance = mock_worker_thread_cls.return_value
+    mock_thread_instance.is_alive.return_value = True
 
+    gui_frame.start_stop_button.SetValue(True)
+    gui_frame.toggle_acquisition(None)
+    
     # Now, stop it
-    gui_app.stop_button.click()
+    gui_frame.start_stop_button.SetValue(False)
+    gui_frame.toggle_acquisition(None)
 
-    # Assert that the worker thread's stop and wait methods were called
-    gui_app.worker_thread.stop.assert_called_once()
-    gui_app.worker_thread.wait.assert_called_once()
-    assert "Server Status: Disconnected" in gui_app.status_label.text()
+    # Assert that the worker thread's stop and join methods were called
+    mock_thread_instance.stop.assert_called_once()
+    mock_thread_instance.join.assert_called_once()
+    assert "Server Status: Disconnected" in gui_frame.status_label.GetLabel()

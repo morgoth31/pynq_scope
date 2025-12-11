@@ -1,6 +1,6 @@
-PyQt6
-pyyaml
+wxPython
+matplotlib
 numpy
-pyqtgraph
 httpx
 websockets
+pyyaml

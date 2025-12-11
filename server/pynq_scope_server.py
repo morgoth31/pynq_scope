@@ -9,6 +9,13 @@ from typing import List, Dict, Any
 import time
 
 try:
+    import pynq
+except ImportError:
+    from unittest.mock import MagicMock
+    import sys
+    sys.modules['pynq'] = MagicMock()
+
+try:
     # This import works when running tests from the project root
     from server.dma_acquisition import dmaAcquisition
 except ModuleNotFoundError:
@@ -48,6 +55,9 @@ class AcquisitionManager:
         if self.emulate:
             self.t = np.linspace(0, 1, SAMPLE_RATE, endpoint=False)
             self.phase = 0
+        
+        # Use a list for timed mode (fixed size) or deque for auto mode (capped)
+        # However, since mode can change per acquisition, we handle it in _acquisition_loop
         self.data_buffer = []
 
     async def connect(self, websocket: WebSocket):
@@ -68,8 +78,9 @@ class AcquisitionManager:
         Args:
             websocket: The WebSocket connection to remove.
         """
-        self.active_connections.remove(websocket)
-        logger.info(f"Client déconnecté. Total: {len(self.active_connections)}")
+        if websocket in self.active_connections:
+            self.active_connections.remove(websocket)
+            logger.info(f"Client déconnecté. Total: {len(self.active_connections)}")
 
     async def broadcast(self, data: bytes):
         """
@@ -78,20 +89,36 @@ class AcquisitionManager:
         Args:
             data: The binary data to broadcast.
         """
-        results = await asyncio.gather(
-            *[client.send_bytes(data) for client in self.active_connections],
-            return_exceptions=True
-        )
-        for i, result in enumerate(results):
-            if isinstance(result, Exception):
-                logger.error(f"Erreur envoi client {i}: {result}. Déconnexion.")
+        if not self.active_connections:
+            return
+
+        # Use explicit loop to handle errors and remove dead connections appropriately
+        dead_connections = []
+        for client in self.active_connections:
+            try:
+                await client.send_bytes(data)
+            except Exception as e:
+                logger.error(f"Erreur envoi client: {e}. Marquage pour déconnexion.")
+                dead_connections.append(client)
+        
+        for dead in dead_connections:
+            self.disconnect(dead)
 
     async def _acquisition_loop(self, mode: str = "auto", duration: int = 0):
         """
         Asynchronous task that simulates data acquisition and broadcasts it to clients.
         """
         logger.info(f"Début de l'acquisition en mode {mode} pour une durée de {duration}s...")
-        self.data_buffer.clear()
+        
+        # In auto mode, use a deque to limit memory usage (e.g., keep last 5 minutes)
+        # 5 mins * 60 sec * 10 chunks/sec = 3000 chunks
+        if mode == "auto":
+            from collections import deque
+            # Keep approx 1 minute history by default to avoid OOM
+            maxlen = int(SAMPLE_RATE / CHUNK_SIZE * 60) 
+            self.data_buffer = deque(maxlen=maxlen)
+        else:
+            self.data_buffer = []
 
         start_time = time.time()
 
