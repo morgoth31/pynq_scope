@@ -121,6 +121,7 @@ class AcquisitionManager:
             self.data_buffer = []
 
         start_time = time.time()
+        loop = asyncio.get_running_loop()
 
         try:
             while self.is_running:
@@ -142,17 +143,24 @@ class AcquisitionManager:
                         self.phase = (self.phase + CHUNK_SIZE) % SAMPLE_RATE
 
                         data_array = np.stack(channels)
+                        await asyncio.sleep(CHUNK_SIZE / SAMPLE_RATE)
 
                     else:
-                        # Real mode: DMA acquisition
-                        arrays = dma.acquire_data(SAMPLE_RATE, CHUNK_SIZE)
+                        # Real mode: DMA acquisition running in a separate thread
+                        # to avoid blocking the event loop
+                        arrays = await loop.run_in_executor(
+                            None,  # Use default executor
+                            dma.acquire_data, 
+                            SAMPLE_RATE, 
+                            CHUNK_SIZE
+                        )
                         data_array = np.stack(arrays)
 
                     self.data_buffer.append(data_array)
                     data_bytes = data_array.tobytes()
                     if self.active_connections:
                         await self.broadcast(data_bytes)
-                    await asyncio.sleep(CHUNK_SIZE / SAMPLE_RATE)
+                    
                 except Exception as e:
                     logger.error(f"Erreur dans la boucle d'acquisition: {e}")
                     await asyncio.sleep(1)
@@ -282,10 +290,18 @@ async def websocket_data(websocket: WebSocket):
         manager.disconnect(websocket)
 
 # --- Point d'entrée pour Uvicorn ---
+
+# --- Point d'entrée pour Uvicorn ---
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Serveur FastAPI pour PYNQ Scope")
     parser.add_argument("--emulate", action="store_true", help="Activer le mode d'émulation sans DMA.")
+    parser.add_argument("--verbose", "-v", action="store_true", help="Activer le mode verbeux (DEBUG)")
     args = parser.parse_args()
+
+    # Mise à jour du niveau de log si verbose
+    if args.verbose:
+        logger.setLevel(logging.DEBUG)
+        logger.debug("Mode DEBUG activé")
 
     # Initialisation du manager avec le mode d'émulation
     manager = AcquisitionManager(emulate=args.emulate)
@@ -297,6 +313,6 @@ if __name__ == "__main__":
     else:
         logger.info("Mode d'émulation activé. Le DMA ne sera pas utilisé.")
 
-    print("Lancement du serveur sur http://0.0.0.0:8000")
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    print(f"Lancement du serveur sur http://0.0.0.0:8000 (Verbose: {args.verbose})")
+    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="debug" if args.verbose else "info")
 

@@ -48,6 +48,30 @@ To trigger the new action, send a POST request to the `/configure` endpoint with
 
 **Example:**
 
-```bash
 curl -X POST -H "Content-Type: application/json" -d '{"action": "new_action", "params": {"param1": "value1"}}' http://127.0.0.1:8000/configure
 ```
+
+## Testing
+
+The project includes a comprehensive test suite (Unit, Integration, E2E) located in the `tests/` directory.
+
+### Running Tests Locally (Emulation)
+To run tests on your development machine (mocks hardware):
+```bash
+./run_tests.sh
+```
+This will:
+1. Create a virtual environment (`.venv`).
+2. Install dependencies.
+3. Run all tests.
+4. Generate a **Markdown report** at `report.md`.
+
+### Running Tests Remotely (Real Hardware)
+To run tests on the PYNQ board (`192.168.144.26`):
+```bash
+./deploy_test.sh
+```
+This script deploys the code and runs tests against the real FPGA hardware, generating a `report.md` on the target.
+
+### Test Report
+After running tests, you can view the execution summary in `report.md`.

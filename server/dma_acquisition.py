@@ -59,3 +59,7 @@ class dmaAcquisition:
         array_7 = output_buffer[7::8]
 
         return array_0, array_1, array_2, array_3, array_4, array_5, array_6, array_7
+
+    def write_data(self, rate_generation, packet_size):
+            status = 0 
+        return status
